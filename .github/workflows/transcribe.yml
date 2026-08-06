@@ -1,0 +1,70 @@
+name: Temporary Japanese transcription
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/transcribe.yml
+
+permissions:
+  contents: write
+
+jobs:
+  transcribe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download audio and Whisper runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 'https://oaisdmntprnorthcentralus.blob.core.windows.net/files/00000000-c798-822f-8b71-318e10d53f1a/raw?se=2026-08-06T22%3A03%3A35Z&sp=r&sv=2026-02-06&sr=b&scid=019fd8fe-8294-77d3-bdbd-67e0d21f9ef9&skoid=bbd22fc4-f881-4ea4-b2f3-c12033cf6a8b&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-06T05%3A23%3A08Z&ske=2026-08-07T05%3A23%3A08Z&sks=b&skv=2026-02-06&sig=gP%2Bjjk3CGK5MvmRYprF4H%2Bun9N2qZ2Thb95jqeyhAYE%3D' -o input.mp3
+          curl -L --fail --retry 3 'https://github.com/sjoerdteunisse/whisper.cpp/releases/download/v1.0.0/whisper-cpp-linux-x64-cpu.zip' -o whisper.zip
+          curl -L --fail --retry 3 'https://github.com/w3xgroup/taskurio-models/releases/download/whisper-models-v1/ggml-tiny-q5_1.bin' -o model.bin
+          unzip -q whisper.zip -d whisper_bin
+          ffmpeg -hide_banner -loglevel error -y -i input.mp3 -ar 16000 -ac 1 -c:a pcm_s16le input.wav
+
+      - name: Transcribe Japanese
+        shell: bash
+        run: |
+          set -euo pipefail
+          WHISPER_BIN="$(find whisper_bin -type f \( -name whisper-cli -o -name main \) | head -n 1)"
+          test -n "$WHISPER_BIN"
+          chmod +x "$WHISPER_BIN"
+          "$WHISPER_BIN" -m model.bin -f input.wav -l ja -otxt -of transcript
+          test -s transcript.txt
+
+      - name: Encrypt transcript
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > public.pem <<'EOF'
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsD7ZYJWLDugQwab8slyj
+          t2De+hDug9NTpkUC9Tjka4bAksvMqnfAnclY0kcWBHDA+HOyKmFyq3RWni2Cg2vt
+          uGeJLu0W5ktsWClrKqaMK4IIRp1FIcvL99PUzA3G816ABlPRj5KgkNk9DUYD1RoL
+          3vre/2JPXlq3/aWdNTAmZmBVdxWza0fzQci4mNrsL1qkkNttEjqSr27bMOiF+yBM
+          yqB2rAEJ5bQIj+V1nKeSAYEGwkyiGB5NWV2ag5Mvs5tMBH/20h5/fVJyDeUCMfjo
+          R2fu4ZtVzfKAGr8dGAPmarXJGGjgkNl1556E3LEuyWWzCpLVj4k8hkBCiMsmpyNS
+          eQIDAQAB
+          -----END PUBLIC KEY-----
+          EOF
+          KEY="$(openssl rand -hex 32)"
+          IV="$(openssl rand -hex 16)"
+          openssl enc -aes-256-cbc -K "$KEY" -iv "$IV" -in transcript.txt -out transcript.enc
+          printf '%s:%s' "$KEY" "$IV" > keyiv.txt
+          openssl pkeyutl -encrypt -pubin -inkey public.pem -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in keyiv.txt -out keyiv.enc
+          base64 -w0 transcript.enc > transcript.enc.b64
+          base64 -w0 keyiv.enc > keyiv.enc.b64
+
+      - name: Store encrypted result
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add transcript.enc.b64 keyiv.enc.b64
+          git commit -m 'Store encrypted transcription result'
+          git push
