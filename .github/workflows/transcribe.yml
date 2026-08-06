@@ -1,14 +1,11 @@
-# trigger-2
 name: Temporary Japanese transcription
 
 on:
-  push:
+  pull_request:
     branches: [main]
-    paths:
-      - .github/workflows/transcribe.yml
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   transcribe:
@@ -60,12 +57,11 @@ jobs:
           base64 -w0 transcript.enc > transcript.enc.b64
           base64 -w0 keyiv.enc > keyiv.enc.b64
 
-      - name: Store encrypted result
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add transcript.enc.b64 keyiv.enc.b64
-          git commit -m 'Store encrypted transcription result'
-          git push
+      - name: Upload encrypted result
+        uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-transcript
+          path: |
+            transcript.enc.b64
+            keyiv.enc.b64
+          retention-days: 1
